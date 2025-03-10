@@ -1,0 +1,12 @@
+[Unit]
+Description=Robot Vision module
+
+[Service]
+Type=simple
+ExecStart=/home/bisonbots/dev/vision/target/release/vision
+User=bisonbots
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

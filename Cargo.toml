@@ -1,0 +1,10 @@
+[package]
+name = "vision"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+apriltag-rs = { version = "0.1.0", path = "../apriltag-rs", features = ["3d"] }
+ctrlc = { version = "3.4.5", features = ["termination"] }
+turbojpeg = "1.2.1"
+vistream = { version = "0.1.0", path = "../vistream/vistream", features = ["jpeg"] }
