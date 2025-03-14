@@ -1,5 +1,6 @@
 use apriltag_rs::{CameraIntrinsics, TagFamily};
 use vistream::{Camera, CameraConfig, FrameSource};
+use vistream::camera::FrameRateLimiter;
 use vistream::stream::LocateStream;
 use vistream::frame::{RGB, MJPG, Luma};
 use vistream::transform::{JPGUnpacker, Rotate, Rotation, Convert};
@@ -67,10 +68,23 @@ fn main() {
 
     let mut cameras_running = false;
 
+    // let upper_frames = match Camera::<MJPG>::new("upper", cfg.clone()) {
+    //     Ok(upper) => {
+    //         let upper = FrameRateLimiter::new(upper, std::time::Duration::from_milis(34));
+    // 
+    //     }
+    //     Err(e) => {
+    //         eprintln!("Could not start tue upper stream: {}", e);
+    //         None
+    //     }
+    // }
+
     let upper = match Camera::<MJPG>::new("upper", cfg.clone()) {
         Ok(upper) => {
+            let upper = FrameRateLimiter::new(upper, std::time::Duration::from_millis(16));
             let upper = JPGUnpacker::<Luma, _>::new(upper);
             let mut upper = Rotate::new(Rotation::Clockwise90, upper);
+
             match upper.start() {
                 Ok(_) => {
                     let locator = AprilTag3dLocator::new(&[TagFamily::Tag36h11], upper_intrinsics, tag_size);
@@ -99,6 +113,7 @@ fn main() {
 
     let lower = match Camera::<MJPG>::new("lower", cfg.clone()) {
         Ok(lower) => {
+            let lower = FrameRateLimiter::new(lower, std::time::Duration::from_millis(16));
             let lower = JPGUnpacker::<Luma, _>::new(lower);
             let mut lower = Rotate::new(Rotation::Clockwise90, lower);
             match lower.start() {
@@ -129,6 +144,7 @@ fn main() {
 
     let picam = match Camera::<RGB>::new("pleco", cfg) {
         Ok(picam) => {
+            let picam = FrameRateLimiter::new(picam, std::time::Duration::from_millis(16));
             let picam = Convert::new(picam);
             let mut picam = Rotate::new(Rotation::Counter90, picam);
             match picam.start() {
@@ -184,4 +200,3 @@ fn main() {
         let _ = locator.stop();
     }
 }
-

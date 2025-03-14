@@ -5,6 +5,8 @@ use vistream::{Locate, LocationData, FrameSource};
 use vistream::frame::{Luma, Pixelate};
 use vistream::error::{Result};
 
+use std::sync::Arc;
+
 
 pub struct AprilTagLocator {
     detector: Detector,
@@ -24,10 +26,15 @@ impl AprilTagLocator {
 }
 
 impl<S: FrameSource<Luma>> Locate<Luma, S> for AprilTagLocator {
-    fn locate(&mut self, source: &mut S) -> Result<Vec<LocationData>> {
-        let Some(frame) = source.get_frame()? else {
-            return Ok(Vec::new());
+    fn locate(&mut self, source: &mut S) -> Result<Option<Vec<LocationData>>> {
+        let Some(mut frame) = source.get_frame()? else {
+            return Ok(None);
         };
+
+        let capped = Arc::make_mut(&mut frame);
+        for mut p in capped.pixels_mut().unwrap() {
+            p[0] = if p[0] > 127 {255} else {0};
+        }
         
         let image = Image::new(frame.width() as u32, frame.height() as u32, frame.bytes());
         let locations: Vec<_> = self.detector.detect(image).into_iter().map(|detection| {
@@ -39,7 +46,7 @@ impl<S: FrameSource<Luma>> Locate<Luma, S> for AprilTagLocator {
             builder.x(x).y(y).id(detection.id()).build().unwrap()
         }).collect();
 
-        Ok(locations)
+        Ok(Some(locations))
     }
 }
 
@@ -65,9 +72,9 @@ impl AprilTag3dLocator {
 }
 
 impl<S: FrameSource<Luma>> Locate<Luma, S> for AprilTag3dLocator {
-    fn locate(&mut self, source: &mut S) -> Result<Vec<LocationData>> {
+    fn locate(&mut self, source: &mut S) -> Result<Option<Vec<LocationData>>> {
         let Some(frame) = source.get_frame()? else {
-            return Ok(Vec::new());
+            return Ok(None);
         };
 
         let image = Image::new(frame.width() as u32, frame.height() as u32, frame.bytes());
@@ -87,6 +94,6 @@ impl<S: FrameSource<Luma>> Locate<Luma, S> for AprilTag3dLocator {
             builder.build().unwrap()
         }).collect();
 
-        Ok(locations)
+        Ok(Some(locations))
     }
 }
