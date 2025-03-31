@@ -1,9 +1,10 @@
 use apriltag_rs::{CameraIntrinsics, TagFamily};
 use vistream::{Camera, CameraConfig, FrameSource};
 use vistream::camera::FrameRateLimiter;
-use vistream::stream::LocateStream;
+use vistream::stream::{LocateStream, FrameStream};
 use vistream::frame::{RGB, MJPG, Luma};
-use vistream::transform::{JPGUnpacker, Rotate, Rotation, Convert};
+use vistream::transform::{JPGUnpacker, Rotate, Rotation, Convert, JPGSource};
+use vistream::transform::{Compressor, Subsamp};
 
 use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,9 +15,8 @@ use crate::apriltag::AprilTag3dLocator;
 // port allocations
 //
 // 1180: upper stripcam Frame feed
-// 1181: upper stripcam apriltag LocationData feed
-// 1182: lower stripcam Frame feed
-// 1183: lower stripcam apriltag LocationData feed
+// 1181: upper-global apriltag LocationData feed
+// 1183: lower-global apriltag LocationData feed
 // 1184: picam Frame feed
 // 1185: picam apriltag LocationData feed
 // 1186: fisheye Frame feed
@@ -26,23 +26,31 @@ fn main() {
     // not actually unsafe. Just a vistream safety precaution
     unsafe{vistream::init().unwrap();}
 
+    // FIXME: Update calibration for new global-shutter cameras
     // Upper coral camera
     let upper_intrinsics = CameraIntrinsics {
-        fx: 273.12925362,
-        fy: 274.45475515,
-        cx: 235.46841613,
-        cy: 318.0861292,
+        fx: 722.97330759,
+        fy: 722.15492054,
+        cx: 248.12094102,
+        cy: 307.60200108,
     };
-    
+ //   [[722.97330759   0.         248.12094102]
+ // [  0.         722.15492054 307.60200108]
+ // [  0.           0.           1.        ]]
+
+
     // Lower coral camera
-    // TODO: These need to be calibrated for the new camera
-    // They're probably close, but not sufficiently correct.
+    // FIXME: These need to be calibrated for the new camera
     let lower_intrinsics = CameraIntrinsics {
-        fx: 264.40423797,
-        fy: 261.96072927,
-        cx: 237.85975668,
-        cy: 326.9399546,
+        fx: 715.98368839,
+        fy: 717.41934156,
+        cx: 284.7698147,
+        cy: 329.76605822,
     };
+ //    [[715.98368839   0.         284.7698147 ]
+ // [  0.         717.41934156 329.76605822]
+ // [  0.           0.           1.        ]]
+
 
     // Algae pickup cam
     // picam
@@ -66,22 +74,146 @@ fn main() {
     cfg.width(640);
     cfg.height(480);
 
+
     let mut cameras_running = false;
 
-    // let upper_frames = match Camera::<MJPG>::new("upper", cfg.clone()) {
-    //     Ok(upper) => {
-    //         let upper = FrameRateLimiter::new(upper, std::time::Duration::from_milis(34));
-    // 
-    //     }
-    //     Err(e) => {
-    //         eprintln!("Could not start tue upper stream: {}", e);
-    //         None
-    //     }
-    // }
-
-    let upper = match Camera::<MJPG>::new("upper", cfg.clone()) {
+    let upper_frames = match Camera::<MJPG>::new("upper-global", cfg.clone()) {
         Ok(upper) => {
-            let upper = FrameRateLimiter::new(upper, std::time::Duration::from_millis(16));
+            let compressor = match Compressor::new() {
+                Ok(mut comp) => {
+                    let _ = comp.set_quality(8);
+                    let _ = comp.set_subsamp(Subsamp::Sub1x4);
+                    Some(comp)
+                }
+                Err(_) => {
+                    None
+                }
+            };
+            if let Some(compressor) = compressor {
+                let upper = FrameRateLimiter::new_framerate(upper, 15.0);
+                let upper = JPGUnpacker::<RGB, _>::new(upper);
+                let upper = Rotate::new(Rotation::Clockwise90, upper);
+                let mut upper = JPGSource::new_with_compressor(upper, compressor);
+    
+                match upper.start() {
+                    Ok(_) => {
+                        match FrameStream::launch("0.0.0.0:1180".parse().unwrap(), upper) {
+                            Ok(stream) => {
+                                cameras_running = true;
+                                Some(stream)
+                            }
+                            Err(e) => {
+                                eprintln!("Something went wrong starting upper frame stream: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        None
+                    }
+                }
+    
+            } else {
+                None
+            }
+        }
+        Err(_) => {
+            None
+        }
+    };
+    
+    let picam_frames = match Camera::<RGB>::new("pleco", cfg.clone()) {
+        Ok(picam) => {
+            let compressor = match Compressor::new() {
+                Ok(mut comp) => {
+                    let _ = comp.set_quality(8);
+                    let _ = comp.set_subsamp(Subsamp::Sub1x4);
+                    Some(comp)
+                }
+                Err(_) => {
+                    None
+                }
+            };
+            if let Some(compressor) = compressor {
+                let picam = FrameRateLimiter::new_framerate(picam, 15.0);
+                let picam = Rotate::new(Rotation::Counter90, picam);
+                let mut picam = JPGSource::new_with_compressor(picam, compressor);
+                // FIXME This seems to not actually matter. That's a problem.
+                match picam.start() {
+                    Ok(_) => {
+                        match FrameStream::launch("0.0.0.0:1184".parse().unwrap(), picam) {
+                            Ok(stream) => {
+                                cameras_running = true;
+                                Some(stream)
+                            }
+                            Err(e) => {
+                                eprintln!("Something went wrong starting picam frame stream: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        None
+                    }
+                }
+    
+            } else {
+                None
+            }
+        }
+        Err(_) => {
+            None
+        }
+    };
+    
+    let goldie_frames = match Camera::<MJPG>::new("goldie", cfg.clone()) {
+        Ok(goldie) => {
+            let compressor = match Compressor::new() {
+                Ok(mut comp) => {
+                    let _ = comp.set_quality(8);
+                    let _ = comp.set_subsamp(Subsamp::Sub1x4);
+                    Some(comp)
+                }
+                Err(_) => {
+                    None
+                }
+            };
+            if let Some(compressor) = compressor {
+                let goldie = FrameRateLimiter::new_framerate(goldie, 15.0);
+                let goldie = JPGUnpacker::<RGB, _>::new(goldie);
+                let goldie = Rotate::new(Rotation::Clockwise180, goldie);
+                let mut goldie = JPGSource::new_with_compressor(goldie, compressor);
+                match goldie.start() {
+                    Ok(_) => {
+                        match FrameStream::launch("0.0.0.0:1186".parse().unwrap(), goldie) {
+                            Ok(stream) => {
+                                cameras_running = true;
+                                Some(stream)
+                            }
+                            Err(e) => {
+                                eprintln!("Something went wrong starting goldie frame stream: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        None
+                    }
+                }
+
+            } else {
+                None
+            }
+        }
+        Err(_) => {
+            None
+        }
+    };
+
+
+    let upper = match Camera::<MJPG>::new("upper-global", cfg.clone()) {
+        Ok(upper) => {
+            let upper = FrameRateLimiter::new(upper, std::time::Duration::from_millis(8));
             let upper = JPGUnpacker::<Luma, _>::new(upper);
             let mut upper = Rotate::new(Rotation::Clockwise90, upper);
 
@@ -111,11 +243,11 @@ fn main() {
         }
     };
 
-    let lower = match Camera::<MJPG>::new("lower", cfg.clone()) {
+    let lower = match Camera::<MJPG>::new("lower-global", cfg.clone()) {
         Ok(lower) => {
-            let lower = FrameRateLimiter::new(lower, std::time::Duration::from_millis(16));
+            let lower = FrameRateLimiter::new(lower, std::time::Duration::from_millis(8));
             let lower = JPGUnpacker::<Luma, _>::new(lower);
-            let mut lower = Rotate::new(Rotation::Clockwise90, lower);
+            let mut lower = Rotate::new(Rotation::Counter90, lower);
             match lower.start() {
                 Ok(_) => {
                     let locator = AprilTag3dLocator::new(&[TagFamily::Tag36h11], lower_intrinsics, tag_size);
@@ -144,7 +276,7 @@ fn main() {
 
     let picam = match Camera::<RGB>::new("pleco", cfg) {
         Ok(picam) => {
-            let picam = FrameRateLimiter::new(picam, std::time::Duration::from_millis(16));
+            let picam = FrameRateLimiter::new(picam, std::time::Duration::from_millis(8));
             let picam = Convert::new(picam);
             let mut picam = Rotate::new(Rotation::Counter90, picam);
             match picam.start() {
@@ -191,12 +323,26 @@ fn main() {
     while !stop_flag.load(Ordering::Acquire) {}
 
     if let Some(locator) = lower {
-        let _ = locator.stop();
+        let _ = dbg!(locator.stop());
     }
     if let Some(locator) = upper {
-        let _ = locator.stop();
+        let _ = dbg!(locator.stop());
     }
     if let Some(locator) = picam {
-        let _ = locator.stop();
+        let _ = dbg!(locator.stop());
     }
+    
+    if let Some(stream) = upper_frames {
+        let _ = dbg!(stream.stop());
+    }
+    if let Some(stream) = picam_frames {
+        let _ = dbg!(stream.stop());
+    }
+    if let Some(stream) = goldie_frames {
+        let _ = dbg!(stream.stop());
+    }
+
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
 }

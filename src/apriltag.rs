@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use apriltag_rs::{Image, Detector, CameraIntrinsics, TagFamily};
+use apriltag_rs::{Image, Detector, DetectorConfig, CameraIntrinsics, TagFamily};
 
 use vistream::{Locate, LocationData, FrameSource};
 use vistream::frame::{Luma, Pixelate};
@@ -58,7 +58,11 @@ pub struct AprilTag3dLocator {
 
 impl AprilTag3dLocator {
     pub fn new(families: &[TagFamily], intrinsics: CameraIntrinsics, tag_size: f64) -> AprilTag3dLocator {
-        let mut detector = Detector::new();
+        let mut config = DetectorConfig::default();
+        config.threads = 2;
+        config.quad_decimate = 1.0;
+        config.quad_sigma = 1.5;
+        let mut detector = Detector::from_config(config);
         for family in families {
             detector.add(*family);
         }
@@ -93,6 +97,9 @@ impl<S: FrameSource<Luma>> Locate<Luma, S> for AprilTag3dLocator {
 
             builder.build().unwrap()
         }).collect();
+        // if locations.is_empty() {
+        //     return Ok(None);
+        // }
 
         Ok(Some(locations))
     }
